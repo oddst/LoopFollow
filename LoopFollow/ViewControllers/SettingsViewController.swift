@@ -16,10 +16,7 @@ final class SettingsViewController: UIViewController {
         super.viewDidLoad()
 
         // Build SwiftUI menu
-        host = UIHostingController(
-            rootView: SettingsMenuView { [weak self] nightscoutEnabled in
-                self?.tabBarController?.tabBar.items?[3].isEnabled = nightscoutEnabled
-            })
+        host = UIHostingController(rootView: SettingsMenuView())
 
         // Dark-mode override
         if Storage.shared.forceDarkMode.value {
@@ -37,5 +34,11 @@ final class SettingsViewController: UIViewController {
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
         host.didMove(toParent: self)
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+
+        Observable.shared.settingsPath.set(NavigationPath())
     }
 }

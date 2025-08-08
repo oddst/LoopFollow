@@ -16,6 +16,11 @@ func IsNightscoutEnabled() -> Bool {
     return !Storage.shared.url.value.isEmpty
 }
 
+private enum SecondTab {
+    case remote
+    case alarms
+}
+
 class MainViewController: UIViewController, UITableViewDataSource, ChartViewDelegate, UNUserNotificationCenterDelegate, UIScrollViewDelegate {
     @IBOutlet var BGText: UILabel!
     @IBOutlet var DeltaText: UILabel!
@@ -103,10 +108,10 @@ class MainViewController: UIViewController, UITableViewDataSource, ChartViewDele
     // calendar setup
     let store = EKEventStore()
 
-    // Stores the time of the last speech announcement to prevent repeated announcements.
-    var lastSpeechTime: Date?
+    // Stores the timestamp of the last BG value that was spoken.
+    var lastSpokenBGDate: TimeInterval = 0
 
-    var autoScrollPauseUntil: Date? = nil
+    var autoScrollPauseUntil: Date?
 
     var IsNotLooping = false
 
@@ -122,6 +127,11 @@ class MainViewController: UIViewController, UITableViewDataSource, ChartViewDele
         if Storage.shared.migrationStep.value < 1 {
             Storage.shared.migrateStep1()
             Storage.shared.migrationStep.value = 1
+        }
+
+        if Storage.shared.migrationStep.value < 2 {
+            Storage.shared.migrateStep2()
+            Storage.shared.migrationStep.value = 2
         }
 
         // Synchronize info types to ensure arrays are the correct size
@@ -218,9 +228,11 @@ class MainViewController: UIViewController, UITableViewDataSource, ChartViewDele
         /// When an alarm is triggered, go to the snoozer tab
         Observable.shared.currentAlarm.$value
             .receive(on: DispatchQueue.main)
-            .compactMap { $0 } /// Ignore nil
+            .compactMap { $0 }
             .sink { [weak self] _ in
-                self?.tabBarController?.selectedIndex = 2
+                if let snoozerIndex = self?.getSnoozerTabIndex() {
+                    self?.tabBarController?.selectedIndex = snoozerIndex
+                }
             }
             .store(in: &cancellables)
 
@@ -273,7 +285,201 @@ class MainViewController: UIViewController, UITableViewDataSource, ChartViewDele
             }
             .store(in: &cancellables)
 
+        Storage.shared.alarmsPosition.$value
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.setupTabBar()
+            }
+            .store(in: &cancellables)
+
+        Storage.shared.remotePosition.$value
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.setupTabBar()
+            }
+            .store(in: &cancellables)
+
+        Storage.shared.nightscoutPosition.$value
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.setupTabBar()
+            }
+            .store(in: &cancellables)
+
+        Storage.shared.url.$value
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateNightscoutTabState()
+            }
+            .store(in: &cancellables)
+
+        Storage.shared.apnsKey.$value
+            .receive(on: DispatchQueue.main)
+            .removeDuplicates()
+            .sink { _ in
+                JWTManager.shared.invalidateCache()
+            }
+            .store(in: &cancellables)
+
+        Storage.shared.teamId.$value
+            .receive(on: DispatchQueue.main)
+            .removeDuplicates()
+            .sink { _ in
+                JWTManager.shared.invalidateCache()
+            }
+            .store(in: &cancellables)
+
+        Storage.shared.keyId.$value
+            .receive(on: DispatchQueue.main)
+            .removeDuplicates()
+            .sink { _ in
+                JWTManager.shared.invalidateCache()
+            }
+            .store(in: &cancellables)
+
+        Storage.shared.device.$value
+            .receive(on: DispatchQueue.main)
+            .removeDuplicates()
+            .sink { [weak self] _ in
+                guard let self = self else { return }
+                let isTrioDevice = (Storage.shared.device.value == "Trio")
+                let isLoopDevice = (Storage.shared.device.value == "Loop")
+
+                let currentRemoteType = Storage.shared.remoteType.value
+
+                // Check if current remote type is invalid for the device
+                let shouldReset = (currentRemoteType == .loopAPNS && !isLoopDevice) ||
+                    (currentRemoteType == .trc && !isTrioDevice) ||
+                    (currentRemoteType == .nightscout && !isTrioDevice)
+
+                if shouldReset {
+                    Storage.shared.remoteType.value = .none
+                }
+            }
+            .store(in: &cancellables)
+
         updateQuickActions()
+        setupTabBar()
+
+        speechSynthesizer.delegate = self
+    }
+
+    private func setupTabBar() {
+        guard let tabBarController = tabBarController else { return }
+
+        // Store current selection before making changes
+        let currentSelectedIndex = tabBarController.selectedIndex
+
+        // Check if we need to handle More tab disappearing
+        let wasInMoreTab = currentSelectedIndex == 4 &&
+            tabBarController.viewControllers?.last is MoreMenuViewController
+        let willHaveMoreTab = hasItemsInMore()
+
+        // If currently in More tab and it's going away, we need to handle this carefully
+        if wasInMoreTab, !willHaveMoreTab {
+            // First, dismiss any modals that might be open
+            if let presented = tabBarController.presentedViewController {
+                presented.dismiss(animated: false) { [weak self] in
+                    // After dismissal, rebuild tabs with home selected
+                    self?.rebuildTabs(tabBarController: tabBarController,
+                                      willHaveMoreTab: willHaveMoreTab,
+                                      selectedIndex: 0)
+                }
+                return
+            }
+        }
+
+        // For all other cases, rebuild tabs normally
+        rebuildTabs(tabBarController: tabBarController,
+                    willHaveMoreTab: willHaveMoreTab,
+                    selectedIndex: wasInMoreTab && !willHaveMoreTab ? 0 : currentSelectedIndex)
+    }
+
+    private func rebuildTabs(tabBarController: UITabBarController,
+                             willHaveMoreTab: Bool,
+                             selectedIndex: Int)
+    {
+        let storyboard = UIStoryboard(name: "Main", bundle: nil)
+        var viewControllers: [UIViewController] = []
+
+        // Tab 0 - Home (always)
+        viewControllers.append(self)
+
+        // Tab 1 - Dynamic based on what's assigned to position2
+        if let vc = createViewController(for: .position2, storyboard: storyboard) {
+            viewControllers.append(vc)
+        }
+
+        // Tab 2 - Snoozer (always)
+        let snoozerVC = storyboard.instantiateViewController(withIdentifier: "SnoozerViewController")
+        snoozerVC.tabBarItem = UITabBarItem(title: "Snoozer", image: UIImage(systemName: "zzz"), tag: 2)
+        viewControllers.append(snoozerVC)
+
+        // Tab 3 - Dynamic based on what's assigned to position4
+        if let vc = createViewController(for: .position4, storyboard: storyboard) {
+            viewControllers.append(vc)
+        }
+
+        // Tab 4 - Settings or More
+        if willHaveMoreTab {
+            let moreVC = MoreMenuViewController()
+            moreVC.tabBarItem = UITabBarItem(title: "More", image: UIImage(systemName: "ellipsis"), tag: 4)
+            viewControllers.append(moreVC)
+        } else {
+            let settingsVC = SettingsViewController()
+            settingsVC.tabBarItem = UITabBarItem(title: "Settings", image: UIImage(systemName: "gear"), tag: 4)
+            viewControllers.append(settingsVC)
+        }
+
+        // Update view controllers without animation to prevent glitches
+        tabBarController.setViewControllers(viewControllers, animated: false)
+
+        // Restore selection if valid, otherwise default to home
+        let safeIndex = min(selectedIndex, viewControllers.count - 1)
+        tabBarController.selectedIndex = max(0, safeIndex)
+
+        updateNightscoutTabState()
+    }
+
+    private func getSnoozerTabIndex() -> Int? {
+        guard let tabBarController = tabBarController,
+              let viewControllers = tabBarController.viewControllers else { return nil }
+
+        for (index, vc) in viewControllers.enumerated() {
+            if let _ = vc as? SnoozerViewController {
+                return index
+            }
+        }
+
+        return nil
+    }
+
+    private func createViewController(for position: TabPosition, storyboard: UIStoryboard) -> UIViewController? {
+        if Storage.shared.alarmsPosition.value == position {
+            let vc = storyboard.instantiateViewController(withIdentifier: "AlarmViewController")
+            vc.tabBarItem = UITabBarItem(title: "Alarms", image: UIImage(systemName: "alarm"), tag: position == .position2 ? 1 : 3)
+            return vc
+        }
+
+        if Storage.shared.remotePosition.value == position {
+            let vc = storyboard.instantiateViewController(withIdentifier: "RemoteViewController")
+            vc.tabBarItem = UITabBarItem(title: "Remote", image: UIImage(systemName: "antenna.radiowaves.left.and.right"), tag: position == .position2 ? 1 : 3)
+            return vc
+        }
+
+        if Storage.shared.nightscoutPosition.value == position {
+            let vc = storyboard.instantiateViewController(withIdentifier: "NightscoutViewController")
+            vc.tabBarItem = UITabBarItem(title: "Nightscout", image: UIImage(systemName: "safari"), tag: position == .position2 ? 1 : 3)
+            return vc
+        }
+
+        return nil
+    }
+
+    private func hasItemsInMore() -> Bool {
+        return Storage.shared.alarmsPosition.value == .more ||
+            Storage.shared.remotePosition.value == .more ||
+            Storage.shared.nightscoutPosition.value == .more
     }
 
     // Update the Home Screen Quick Action for toggling the "Speak BG" feature based on the current speakBG setting.
@@ -327,7 +533,6 @@ class MainViewController: UIViewController, UITableViewDataSource, ChartViewDele
         currentCage = nil
         currentSage = nil
         currentIage = nil
-        lastSpeechTime = nil
         refreshControl.endRefreshing()
     }
 
@@ -476,12 +681,23 @@ class MainViewController: UIViewController, UITableViewDataSource, ChartViewDele
         return String(format: "%02d:%02d", hours, minutes)
     }
 
+    private func updateNightscoutTabState() {
+        guard let tabBarController = tabBarController,
+              let viewControllers = tabBarController.viewControllers else { return }
+
+        let isNightscoutEnabled = !Storage.shared.url.value.isEmpty
+
+        for (index, vc) in viewControllers.enumerated() {
+            if vc is NightscoutViewController {
+                tabBarController.tabBar.items?[index].isEnabled = isNightscoutEnabled
+            }
+        }
+    }
+
     func showHideNSDetails() {
         var isHidden = false
-        var isEnabled = true
         if !IsNightscoutEnabled() {
             isHidden = true
-            isEnabled = false
         }
 
         LoopStatusLabel.isHidden = isHidden
@@ -496,12 +712,7 @@ class MainViewController: UIViewController, UITableViewDataSource, ChartViewDele
             infoTable.isHidden = true
         }
 
-        if IsNightscoutEnabled() {
-            isEnabled = true
-        }
-
-        guard let nightscoutTab = tabBarController?.tabBar.items![3] else { return }
-        nightscoutTab.isEnabled = isEnabled
+        updateNightscoutTabState()
     }
 
     func updateBadge(val: Int) {
@@ -734,5 +945,23 @@ class MainViewController: UIViewController, UITableViewDataSource, ChartViewDele
 
         Storage.shared.infoSort.value = sortArray
         Storage.shared.infoVisible.value = visibleArray
+    }
+}
+
+extension MainViewController: AVSpeechSynthesizerDelegate {
+    func speechSynthesizer(_: AVSpeechSynthesizer, didFinish _: AVSpeechUtterance) {
+        let appState = UIApplication.shared.applicationState
+        let isSilentTuneMode = Storage.shared.backgroundRefreshType.value == .silentTune
+
+        if isSilentTuneMode, appState == .background {
+            LogManager.shared.log(category: .general, message: "Silent tune active in background; not deactivating session.", isDebug: true)
+        } else {
+            do {
+                try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                LogManager.shared.log(category: .general, message: "Audio session deactivated after speech.", isDebug: true)
+            } catch {
+                LogManager.shared.log(category: .alarm, message: "Failed to deactivate audio session: \(error)")
+            }
+        }
     }
 }

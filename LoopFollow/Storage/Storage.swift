@@ -11,11 +11,11 @@ import UIKit
  */
 
 class Storage {
-    var remoteType = StorageValue<RemoteType>(key: "remoteType", defaultValue: .nightscout)
+    var remoteType = StorageValue<RemoteType>(key: "remoteType", defaultValue: .none)
     var deviceToken = StorageValue<String>(key: "deviceToken", defaultValue: "")
     var expirationDate = StorageValue<Date?>(key: "expirationDate", defaultValue: nil)
     var sharedSecret = StorageValue<String>(key: "sharedSecret", defaultValue: "")
-    var productionEnvironment = StorageValue<Bool>(key: "productionEnvironment", defaultValue: true)
+    var productionEnvironment = StorageValue<Bool>(key: "productionEnvironment", defaultValue: false)
     var apnsKey = StorageValue<String>(key: "apnsKey", defaultValue: "")
     var teamId = StorageValue<String?>(key: "teamId", defaultValue: nil)
     var keyId = StorageValue<String>(key: "keyId", defaultValue: "")
@@ -159,6 +159,14 @@ class Storage {
 
     var persistentNotification = StorageValue<Bool>(key: "persistentNotification", defaultValue: false)
     var persistentNotificationLastBGTime = StorageValue<Date>(key: "persistentNotificationLastBGTime", defaultValue: .distantPast)
+
+    var lastLoopingChecked = StorageValue<Date?>(key: "lastLoopingChecked", defaultValue: nil)
+
+    var alarmsPosition = StorageValue<TabPosition>(key: "alarmsPosition", defaultValue: .position2)
+    var remotePosition = StorageValue<TabPosition>(key: "remotePosition", defaultValue: .more)
+    var nightscoutPosition = StorageValue<TabPosition>(key: "nightscoutPosition", defaultValue: .position4)
+
+    var loopAPNSQrCodeURL = StorageValue<String>(key: "loopAPNSQrCodeURL", defaultValue: "")
 
     static let shared = Storage()
     private init() {}
