@@ -20,6 +20,7 @@ struct LoopAPNSBolusView: View {
     @State private var lastLoopTime: TimeInterval? = nil
     @State private var otpTimeRemaining: Int? = nil
     @State private var showOldCalculationWarning = false
+    @State private var showTOTPWarning = false
     private let otpPeriod: TimeInterval = 30
     private var otpTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
@@ -125,7 +126,7 @@ struct LoopAPNSBolusView: View {
                     }
 
                     // TOTP Blocking Warning Section
-                    if isTOTPBlocked {
+                    if isTOTPBlocked && showTOTPWarning {
                         Section {
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack {
@@ -187,6 +188,15 @@ struct LoopAPNSBolusView: View {
 
                 // Validate TOTP state when view appears
                 _ = isTOTPBlocked
+
+                // Add delay before showing TOTP warning to prevent flash after successful send
+                if isTOTPBlocked {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showTOTPWarning = true
+                    }
+                } else {
+                    showTOTPWarning = false
+                }
             }
             .onReceive(otpTimer) { _ in
                 let now = Date().timeIntervalSince1970
@@ -352,43 +362,28 @@ struct LoopAPNSBolusView: View {
             otp: otpCode
         )
 
-        Task {
-            do {
-                let apnsService = LoopAPNSService()
-                let success = try await apnsService.sendBolusViaAPNS(payload: payload)
-
-                DispatchQueue.main.async {
-                    isLoading = false
-                    if success {
-                        // Mark TOTP code as used
-                        TOTPService.shared.markTOTPAsUsed(qrCodeURL: Storage.shared.loopAPNSQrCodeURL.value)
-                        alertMessage = "Insulin sent successfully!"
-                        alertType = .success
-                        LogManager.shared.log(
-                            category: .apns,
-                            message: "Insulin sent - Amount: \(insulinAmount.doubleValue(for: .internationalUnit()))U"
-                        )
-                    } else {
-                        alertMessage = "Failed to send insulin. Check your Loop APNS configuration."
-                        alertType = .error
-                        LogManager.shared.log(
-                            category: .apns,
-                            message: "Failed to send insulin"
-                        )
-                    }
-                    showAlert = true
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    isLoading = false
-                    alertMessage = "Error sending insulin: \(error.localizedDescription)"
-                    alertType = .error
+        let apnsService = LoopAPNSService()
+        apnsService.sendBolusViaAPNS(payload: payload) { success, errorMessage in
+            DispatchQueue.main.async {
+                self.isLoading = false
+                if success {
+                    // Mark TOTP code as used
+                    TOTPService.shared.markTOTPAsUsed(qrCodeURL: Storage.shared.loopAPNSQrCodeURL.value)
+                    self.alertMessage = "Insulin sent successfully!"
+                    self.alertType = .success
                     LogManager.shared.log(
                         category: .apns,
-                        message: "APNS insulin error: \(error.localizedDescription)"
+                        message: "Insulin sent - Amount: \(insulinAmount.doubleValue(for: .internationalUnit()))U"
                     )
-                    showAlert = true
+                } else {
+                    self.alertMessage = errorMessage ?? "Failed to send insulin. Check your Loop APNS configuration."
+                    self.alertType = .error
+                    LogManager.shared.log(
+                        category: .apns,
+                        message: "Failed to send insulin: \(errorMessage ?? "unknown error")"
+                    )
                 }
+                self.showAlert = true
             }
         }
     }
