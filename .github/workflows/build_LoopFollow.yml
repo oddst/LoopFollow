@@ -191,7 +191,7 @@ jobs:
   build:
     name: Build
     needs: [check_certs, check_alive_and_permissions, check_latest_from_upstream]
-    runs-on: macos-26-xlarge
+    runs-on: macos-26
     permissions:
       contents: write
     if:
