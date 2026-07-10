@@ -1,13 +1,25 @@
 // LoopFollow
 // LoopAPNSService.swift
 
-import CryptoKit
 import Foundation
 import HealthKit
-import SwiftJWT
 
 class LoopAPNSService {
     private let storage = Storage.shared
+
+    /// Returns the effective APNs credentials for sending commands to the remote app.
+    /// Same team → use LoopFollow's own key. Different team → use remote-specific key.
+    private func effectiveCredentials() -> (apnsKey: String, keyId: String, teamId: String) {
+        let lfTeamId = BuildDetails.default.teamID ?? ""
+        let remoteTeamId = storage.teamId.value ?? ""
+        let sameTeam = !lfTeamId.isEmpty && !remoteTeamId.isEmpty && lfTeamId == remoteTeamId
+
+        if sameTeam || remoteTeamId.isEmpty {
+            return (storage.lfApnsKey.value, storage.lfKeyId.value, lfTeamId)
+        } else {
+            return (storage.remoteApnsKey.value, storage.remoteKeyId.value, remoteTeamId)
+        }
+    }
 
     enum LoopAPNSError: Error, LocalizedError {
         case invalidConfiguration
@@ -47,7 +59,7 @@ class LoopAPNSService {
         }
     }
 
-    private func createReturnNotificationInfo() -> [String: Any]? {
+    private func createReturnNotificationInfo() -> ReturnNotificationInfo? {
         let loopFollowDeviceToken = Observable.shared.loopFollowDeviceToken.value
         guard !loopFollowDeviceToken.isEmpty else { return nil }
 
@@ -57,46 +69,45 @@ class LoopAPNSService {
             return nil
         }
 
-        // Get the target Loop app's Team ID from storage.
-        let targetTeamId = storage.teamId.value ?? ""
-        let teamIdsAreDifferent = loopFollowTeamID != targetTeamId
+        let lfKeyId = storage.lfKeyId.value
+        let lfApnsKey = storage.lfApnsKey.value
 
-        let keyIdForReturn: String
-        let apnsKeyForReturn: String
-
-        if teamIdsAreDifferent {
-            // Team IDs differ, use the separate return credentials.
-            keyIdForReturn = storage.returnKeyId.value
-            apnsKeyForReturn = storage.returnApnsKey.value
-        } else {
-            // Team IDs are the same, use the primary credentials.
-            keyIdForReturn = storage.keyId.value
-            apnsKeyForReturn = storage.apnsKey.value
-        }
-
-        // Ensure we have the necessary credentials.
-        guard !keyIdForReturn.isEmpty, !apnsKeyForReturn.isEmpty else {
-            LogManager.shared.log(category: .apns, message: "Missing required return APNS credentials. Check Remote Settings.")
+        guard !lfKeyId.isEmpty, !lfApnsKey.isEmpty else {
+            LogManager.shared.log(category: .apns, message: "Missing LoopFollow APNS credentials. Configure them in App Settings → APN.")
             return nil
         }
 
-        let returnInfo: [String: Any] = [
-            "production_environment": BuildDetails.default.isTestFlightBuild(),
-            "device_token": loopFollowDeviceToken,
-            "bundle_id": Bundle.main.bundleIdentifier ?? "",
-            "team_id": loopFollowTeamID,
-            "key_id": keyIdForReturn,
-            "apns_key": apnsKeyForReturn,
-        ]
+        return ReturnNotificationInfo(
+            productionEnvironment: BuildDetails.default.isTestFlightBuild(),
+            deviceToken: loopFollowDeviceToken,
+            bundleId: Bundle.main.bundleIdentifier ?? "",
+            teamId: loopFollowTeamID,
+            keyId: lfKeyId,
+            apnsKey: lfApnsKey
+        )
+    }
 
-        return returnInfo
+    /// Encrypts return notification info using OTP code
+    private func encryptReturnNotificationInfo(returnInfo: ReturnNotificationInfo, otpCode: String) -> String? {
+        guard let messenger = OTPSecureMessenger(otpCode: otpCode) else {
+            LogManager.shared.log(category: .apns, message: "Failed to create OTP secure messenger")
+            return nil
+        }
+
+        do {
+            return try messenger.encrypt(returnInfo)
+        } catch {
+            LogManager.shared.log(category: .apns, message: "Failed to encrypt return notification info: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     /// Validates the Loop APNS setup by checking all required fields
     /// - Returns: True if setup is valid, false otherwise
     func validateSetup() -> Bool {
-        let hasKeyId = !storage.keyId.value.isEmpty
-        let hasAPNSKey = !storage.apnsKey.value.isEmpty
+        let creds = effectiveCredentials()
+        let hasKeyId = !creds.keyId.isEmpty
+        let hasAPNSKey = !creds.apnsKey.isEmpty
         let hasQrCode = !storage.loopAPNSQrCodeURL.value.isEmpty
         let hasDeviceToken = !Storage.shared.deviceToken.value.isEmpty
         let hasBundleIdentifier = !Storage.shared.bundleId.value.isEmpty
@@ -125,8 +136,7 @@ class LoopAPNSService {
 
         let deviceToken = Storage.shared.deviceToken.value
         let bundleIdentifier = Storage.shared.bundleId.value
-        let keyId = storage.keyId.value
-        let apnsKey = storage.apnsKey.value
+        let creds = effectiveCredentials()
 
         // Create APNS notification payload (matching Loop's expected format)
         let now = Date()
@@ -150,11 +160,18 @@ class LoopAPNSService {
             "alert": "Remote Carbs Entry: \(String(format: "%.1f", carbsAmount)) grams\nAbsorption Time: \(String(format: "%.1f", absorptionTime)) hours",
         ] as [String: Any]
 
-        /* Let's wait with this until we have an encryption solution for LRC
-         if let returnInfo = createReturnNotificationInfo() {
-             finalPayload["return_notification"] = returnInfo
-         }
-         */
+        // Encrypt and include return notification info using OTP
+        if let returnInfo = createReturnNotificationInfo() {
+            LogManager.shared.log(category: .apns, message: "Created return notification info for carbs - deviceToken: \(LogRedactor.head(returnInfo.deviceToken)), bundleId: \(LogRedactor.bundleId(returnInfo.bundleId))")
+            if let encryptedReturnInfo = encryptReturnNotificationInfo(returnInfo: returnInfo, otpCode: String(payload.otp)) {
+                finalPayload["encrypted_return_notification"] = encryptedReturnInfo
+                LogManager.shared.log(category: .apns, message: "Added encrypted_return_notification to carbs payload, length: \(encryptedReturnInfo.count)")
+            } else {
+                LogManager.shared.log(category: .apns, message: "Failed to encrypt return notification info for carbs command")
+            }
+        } else {
+            LogManager.shared.log(category: .apns, message: "Failed to create return notification info for carbs command")
+        }
 
         // Log the exact carbs amount for debugging precision issues
         LogManager.shared.log(category: .apns, message: "Carbs amount - Raw: \(payload.carbsAmount ?? 0.0), Formatted: \(String(format: "%.1f", carbsAmount)), JSON: \(carbsAmount)")
@@ -166,8 +183,9 @@ class LoopAPNSService {
         sendAPNSNotification(
             deviceToken: deviceToken,
             bundleIdentifier: bundleIdentifier,
-            keyId: keyId,
-            apnsKey: apnsKey,
+            keyId: creds.keyId,
+            apnsKey: creds.apnsKey,
+            teamId: creds.teamId,
             payload: finalPayload,
             completion: completion
         )
@@ -187,8 +205,7 @@ class LoopAPNSService {
 
         let deviceToken = Storage.shared.deviceToken.value
         let bundleIdentifier = Storage.shared.bundleId.value
-        let keyId = storage.keyId.value
-        let apnsKey = storage.apnsKey.value
+        let creds = effectiveCredentials()
 
         // Create APNS notification payload (matching Loop's expected format)
         let now = Date()
@@ -208,11 +225,18 @@ class LoopAPNSService {
             "alert": "Remote Bolus Entry: \(String(format: "%.2f", bolusAmount)) U",
         ] as [String: Any]
 
-        /* Let's wait with this until we have an encryption solution for LRC
-         if let returnInfo = createReturnNotificationInfo() {
-             finalPayload["return_notification"] = returnInfo
-         }
-         */
+        // Encrypt and include return notification info using OTP
+        if let returnInfo = createReturnNotificationInfo() {
+            LogManager.shared.log(category: .apns, message: "Created return notification info for carbs - deviceToken: \(LogRedactor.head(returnInfo.deviceToken)), bundleId: \(LogRedactor.bundleId(returnInfo.bundleId))")
+            if let encryptedReturnInfo = encryptReturnNotificationInfo(returnInfo: returnInfo, otpCode: String(payload.otp)) {
+                finalPayload["encrypted_return_notification"] = encryptedReturnInfo
+                LogManager.shared.log(category: .apns, message: "Added encrypted_return_notification to carbs payload, length: \(encryptedReturnInfo.count)")
+            } else {
+                LogManager.shared.log(category: .apns, message: "Failed to encrypt return notification info for carbs command")
+            }
+        } else {
+            LogManager.shared.log(category: .apns, message: "Failed to create return notification info for carbs command")
+        }
 
         // Log the exact bolus amount for debugging precision issues
         LogManager.shared.log(category: .apns, message: "Bolus amount - Raw: \(payload.bolusAmount ?? 0.0), Formatted: \(String(format: "%.2f", bolusAmount)), JSON: \(bolusAmount)")
@@ -223,8 +247,9 @@ class LoopAPNSService {
         sendAPNSNotification(
             deviceToken: deviceToken,
             bundleIdentifier: bundleIdentifier,
-            keyId: keyId,
-            apnsKey: apnsKey,
+            keyId: creds.keyId,
+            apnsKey: creds.apnsKey,
+            teamId: creds.teamId,
             payload: finalPayload,
             completion: completion
         )
@@ -235,9 +260,10 @@ class LoopAPNSService {
     private func validateCredentials() -> [String]? {
         var errors = [String]()
 
-        let keyId = storage.keyId.value
-        let teamId = Storage.shared.teamId.value ?? ""
-        let apnsKey = storage.apnsKey.value
+        let creds = effectiveCredentials()
+        let keyId = creds.keyId
+        let teamId = creds.teamId
+        let apnsKey = creds.apnsKey
 
         // Validate keyId (should be 10 alphanumeric characters)
         let keyIdPattern = "^[A-Z0-9]{10}$"
@@ -301,6 +327,7 @@ class LoopAPNSService {
         bundleIdentifier: String,
         keyId: String,
         apnsKey: String,
+        teamId: String,
         payload: [String: Any],
         completion: @escaping (Bool, String?) -> Void
     ) {
@@ -313,7 +340,7 @@ class LoopAPNSService {
         }
 
         // Create JWT token for APNS authentication
-        guard let jwt = JWTManager.shared.getOrGenerateJWT(keyId: keyId, teamId: Storage.shared.teamId.value ?? "", apnsKey: apnsKey) else {
+        guard let jwt = JWTManager.shared.getOrGenerateJWT(keyId: keyId, teamId: teamId, apnsKey: apnsKey) else {
             let errorMessage = "Failed to generate JWT, please check that the APNS Key ID, APNS Key and Team ID are correct."
             LogManager.shared.log(category: .apns, message: errorMessage)
             completion(false, errorMessage)
@@ -362,6 +389,13 @@ class LoopAPNSService {
         // Remove nil values to clean up the payload
         let cleanPayload = apnsPayload.compactMapValues { $0 }
 
+        // Log if encrypted_return_notification is in the payload
+        if cleanPayload["encrypted_return_notification"] != nil {
+            LogManager.shared.log(category: .apns, message: "encrypted_return_notification is present in final APNS payload")
+        } else {
+            LogManager.shared.log(category: .apns, message: "WARNING: encrypted_return_notification is NOT in final APNS payload. Available keys: \(Array(cleanPayload.keys).joined(separator: ", "))")
+        }
+
         do {
             let jsonData = try JSONSerialization.data(withJSONObject: cleanPayload)
 
@@ -395,6 +429,7 @@ class LoopAPNSService {
                         LogManager.shared.log(category: .apns, message: "APNS error 400: \(responseBodyMessage) - Check device token and environment settings")
                         completion(false, errorMessage)
                     case 403:
+                        JWTManager.shared.invalidateCache()
                         let errorMessage = "Authentication error. Check your certificate or authentication token. \(responseBodyMessage)"
                         LogManager.shared.log(category: .apns, message: "APNS error 403: \(responseBodyMessage) - Check APNS key permissions for bundle ID")
                         completion(false, errorMessage)
@@ -651,16 +686,27 @@ class LoopAPNSService {
             payload["override-duration-minutes"] = Int(duration / 60)
         }
 
+        // For override commands, we can include return notification info unencrypted
+        // since override commands don't require OTP validation in Loop
         if let returnInfo = createReturnNotificationInfo() {
-            payload["return_notification"] = returnInfo
+            payload["return_notification"] = [
+                "production_environment": returnInfo.productionEnvironment,
+                "device_token": returnInfo.deviceToken,
+                "bundle_id": returnInfo.bundleId,
+                "team_id": returnInfo.teamId,
+                "key_id": returnInfo.keyId,
+                "apns_key": returnInfo.apnsKey,
+            ]
         }
 
         // Send the notification using the existing APNS infrastructure
+        let creds = effectiveCredentials()
         sendAPNSNotification(
             deviceToken: deviceToken,
             bundleIdentifier: bundleIdentifier,
-            keyId: storage.keyId.value,
-            apnsKey: storage.apnsKey.value,
+            keyId: creds.keyId,
+            apnsKey: creds.apnsKey,
+            teamId: creds.teamId,
             payload: payload,
             completion: completion
         )
@@ -696,16 +742,27 @@ class LoopAPNSService {
             "alert": "Cancel Temporary Override",
         ]
 
+        // For override commands, we can include return notification info unencrypted
+        // since override commands don't require OTP validation in Loop
         if let returnInfo = createReturnNotificationInfo() {
-            payload["return_notification"] = returnInfo
+            payload["return_notification"] = [
+                "production_environment": returnInfo.productionEnvironment,
+                "device_token": returnInfo.deviceToken,
+                "bundle_id": returnInfo.bundleId,
+                "team_id": returnInfo.teamId,
+                "key_id": returnInfo.keyId,
+                "apns_key": returnInfo.apnsKey,
+            ]
         }
 
         // Send the notification using the existing APNS infrastructure
+        let creds = effectiveCredentials()
         sendAPNSNotification(
             deviceToken: deviceToken,
             bundleIdentifier: bundleIdentifier,
-            keyId: storage.keyId.value,
-            apnsKey: storage.apnsKey.value,
+            keyId: creds.keyId,
+            apnsKey: creds.apnsKey,
+            teamId: creds.teamId,
             payload: payload,
             completion: completion
         )

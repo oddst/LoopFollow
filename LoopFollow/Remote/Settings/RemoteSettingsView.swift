@@ -1,12 +1,15 @@
 // LoopFollow
 // RemoteSettingsView.swift
 
+import AVFoundation
 import HealthKit
 import SwiftUI
+import UIKit
 
 struct RemoteSettingsView: View {
     @ObservedObject var viewModel: RemoteSettingsViewModel
     @ObservedObject private var device = Storage.shared.device
+    @ObservedObject var bolusIncrement = Storage.shared.bolusIncrement
 
     @State private var showAlert: Bool = false
     @State private var alertType: AlertType? = nil
@@ -18,7 +21,6 @@ struct RemoteSettingsView: View {
 
     enum AlertType {
         case validation
-        case qrCodeError
         case urlTokenValidation
         case urlTokenUpdate
     }
@@ -27,7 +29,20 @@ struct RemoteSettingsView: View {
         self.viewModel = viewModel
     }
 
+    private let diagnosticsAnchorID = "remoteDiagnostics"
+
     var body: some View {
+        ScrollViewReader { proxy in
+            formContent
+                .onChange(of: viewModel.diagnostics.status) { _ in
+                    withAnimation {
+                        proxy.scrollTo(diagnosticsAnchorID, anchor: .top)
+                    }
+                }
+        }
+    }
+
+    private var formContent: some View {
         Form {
             // MARK: - Remote Type Section (Custom Rows)
 
@@ -49,45 +64,17 @@ struct RemoteSettingsView: View {
                     label: "Trio Remote Control",
                     isEnabled: viewModel.isTrioDevice
                 )
-
-                remoteTypeRow(
-                    type: .nightscout,
-                    label: "Nightscout",
-                    isEnabled: viewModel.isTrioDevice
-                )
-
-                Text("Nightscout should be used for Trio 0.2.x.")
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
             }
 
-            // MARK: - QR Code Sharing Section
+            // MARK: - Import/Export Settings Section
 
             Section {
-                if viewModel.remoteType == .none {
-                    Button(action: {
-                        viewModel.isShowingQRCodeScanner = true
-                    }) {
-                        HStack {
-                            Image(systemName: "qrcode.viewfinder")
-                            Text("Import Remote Settings from QR Code")
-                        }
+                NavigationLink(destination: ImportExportSettingsView()) {
+                    HStack {
+                        Image(systemName: "square.and.arrow.down")
+                            .foregroundColor(.blue)
+                        Text("Import/Export Settings")
                     }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                } else {
-                    Button(action: {
-                        viewModel.isShowingQRCodeDisplay = true
-                    }) {
-                        HStack {
-                            Image(systemName: "qrcode")
-                            Text("Export Remote Settings as QR Code")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
                 }
             }
 
@@ -109,9 +96,32 @@ struct RemoteSettingsView: View {
                 guardrailsSection
             }
 
+            if !Storage.shared.bolusIncrementDetected.value {
+                Section(header: Text("Bolus Increment")) {
+                    HStack {
+                        Text("Increment")
+                        Spacer()
+                        TextFieldWithToolBar(
+                            quantity: $bolusIncrement.value,
+                            maxLength: 5,
+                            unit: HKUnit.internationalUnit(),
+                            allowDecimalSeparator: true,
+                            minValue: HKQuantity(unit: .internationalUnit(), doubleValue: 0.001),
+                            maxValue: HKQuantity(unit: .internationalUnit(), doubleValue: 1),
+                            onValidationError: { message in
+                                handleValidationError(message)
+                            }
+                        )
+                        .frame(width: 100)
+                        Text("U")
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
             // MARK: - User Information Section
 
-            if viewModel.remoteType != .none && viewModel.remoteType != .loopAPNS {
+            if viewModel.remoteType == .trc {
                 Section(header: Text("User Information")) {
                     HStack {
                         Text("User")
@@ -136,23 +146,25 @@ struct RemoteSettingsView: View {
                         )
                     }
 
-                    HStack {
-                        Text("APNS Key ID")
-                        TogglableSecureInput(
-                            placeholder: "Enter APNS Key ID",
-                            text: $viewModel.keyId,
-                            style: .singleLine
-                        )
-                    }
+                    if viewModel.areTeamIdsDifferent {
+                        HStack {
+                            Text("APNS Key ID")
+                            TogglableSecureInput(
+                                placeholder: "Enter APNS Key ID",
+                                text: $viewModel.remoteKeyId,
+                                style: .singleLine
+                            )
+                        }
 
-                    VStack(alignment: .leading) {
-                        Text("APNS Key")
-                        TogglableSecureInput(
-                            placeholder: "Paste APNS Key",
-                            text: $viewModel.apnsKey,
-                            style: .multiLine
-                        )
-                        .frame(minHeight: 110)
+                        VStack(alignment: .leading) {
+                            Text("APNS Key")
+                            TogglableSecureInput(
+                                placeholder: "Paste APNS Key",
+                                text: $viewModel.remoteApnsKey,
+                                style: .multiLine
+                            )
+                            .frame(minHeight: 110)
+                        }
                     }
                 }
 
@@ -160,9 +172,14 @@ struct RemoteSettingsView: View {
 
                 Section(header: Text("Debug / Info")) {
                     Text("Device Token: \(Storage.shared.deviceToken.value)")
-                    Text("Production Env.: \(Storage.shared.productionEnvironment.value ? "True" : "False")")
+                    Text("APNS Environment: \(Storage.shared.productionEnvironment.value ? "Production" : "Development")")
                     Text("Team ID: \(Storage.shared.teamId.value ?? "")")
                     Text("Bundle ID: \(Storage.shared.bundleId.value)")
+                    if Storage.shared.bolusIncrementDetected.value {
+                        Text("Bolus Increment: \(Storage.shared.bolusIncrement.value.doubleValue(for: .internationalUnit()), specifier: "%.3f") U")
+                    }
+                    diagnosticsRows
+                        .id(diagnosticsAnchorID)
                 }
             }
 
@@ -179,23 +196,25 @@ struct RemoteSettingsView: View {
                         )
                     }
 
-                    HStack {
-                        Text("APNS Key ID")
-                        TogglableSecureInput(
-                            placeholder: "Enter APNS Key ID",
-                            text: $viewModel.keyId,
-                            style: .singleLine
-                        )
-                    }
+                    if viewModel.areTeamIdsDifferent {
+                        HStack {
+                            Text("APNS Key ID")
+                            TogglableSecureInput(
+                                placeholder: "Enter APNS Key ID",
+                                text: $viewModel.remoteKeyId,
+                                style: .singleLine
+                            )
+                        }
 
-                    VStack(alignment: .leading) {
-                        Text("APNS Key")
-                        TogglableSecureInput(
-                            placeholder: "Paste APNS Key",
-                            text: $viewModel.apnsKey,
-                            style: .multiLine
-                        )
-                        .frame(minHeight: 110)
+                        VStack(alignment: .leading) {
+                            Text("APNS Key")
+                            TogglableSecureInput(
+                                placeholder: "Paste APNS Key",
+                                text: $viewModel.remoteApnsKey,
+                                style: .multiLine
+                            )
+                            .frame(minHeight: 110)
+                        }
                     }
 
                     HStack {
@@ -260,29 +279,11 @@ struct RemoteSettingsView: View {
                         Text("TOTP Code: Invalid QR code URL")
                             .foregroundColor(.red)
                     }
-                }
-
-                if viewModel.areTeamIdsDifferent {
-                    Section(header: Text("Return Notification Settings"), footer: Text("Because LoopFollow and the target app were built with different Team IDs, you must provide the APNS credentials for LoopFollow below.").font(.caption)) {
-                        HStack {
-                            Text("Return APNS Key ID")
-                            TogglableSecureInput(
-                                placeholder: "Enter Key ID for LoopFollow",
-                                text: $viewModel.returnKeyId,
-                                style: .singleLine
-                            )
-                        }
-
-                        VStack(alignment: .leading) {
-                            Text("Return APNS Key")
-                            TogglableSecureInput(
-                                placeholder: "Paste APNS Key for LoopFollow",
-                                text: $viewModel.returnApnsKey,
-                                style: .multiLine
-                            )
-                            .frame(minHeight: 110)
-                        }
+                    if Storage.shared.bolusIncrementDetected.value {
+                        Text("Bolus Increment: \(Storage.shared.bolusIncrement.value.doubleValue(for: .internationalUnit()), specifier: "%.3f") U")
                     }
+                    diagnosticsRows
+                        .id(diagnosticsAnchorID)
                 }
             }
         }
@@ -292,12 +293,6 @@ struct RemoteSettingsView: View {
                 return Alert(
                     title: Text("Validation Error"),
                     message: Text(alertMessage ?? "Invalid input."),
-                    dismissButton: .default(Text("OK"))
-                )
-            case .qrCodeError:
-                return Alert(
-                    title: Text("QR Code Error"),
-                    message: Text(alertMessage ?? "An error occurred while processing the QR code."),
                     dismissButton: .default(Text("OK"))
                 )
             case .urlTokenValidation:
@@ -323,30 +318,6 @@ struct RemoteSettingsView: View {
         .sheet(isPresented: $viewModel.isShowingLoopAPNSScanner) {
             SimpleQRCodeScannerView { result in
                 viewModel.handleLoopAPNSQRCodeScanResult(result)
-            }
-        }
-        .sheet(isPresented: $viewModel.isShowingQRCodeScanner) {
-            SimpleQRCodeScannerView { result in
-                viewModel.handleRemoteCommandQRCodeScanResult(result)
-            }
-        }
-        .sheet(isPresented: $viewModel.isShowingQRCodeDisplay) {
-            NavigationView {
-                VStack {
-                    if let qrCodeString = viewModel.generateQRCodeForCurrentSettings() {
-                        QRCodeDisplayView(qrCodeString: qrCodeString)
-                            .padding()
-                    } else {
-                        Text("Failed to generate QR code")
-                            .foregroundColor(.red)
-                            .padding()
-                    }
-                }
-                .navigationTitle("Share Remote Settings")
-                .navigationBarTitleDisplayMode(.inline)
-                .navigationBarItems(trailing: Button("Done") {
-                    viewModel.isShowingQRCodeDisplay = false
-                })
             }
         }
         .sheet(isPresented: $viewModel.showURLTokenValidation) {
@@ -380,21 +351,12 @@ struct RemoteSettingsView: View {
             let now = Date().timeIntervalSince1970
             otpTimeRemaining = Int(otpPeriod - (now.truncatingRemainder(dividingBy: otpPeriod)))
         }
-        .onReceive(viewModel.$qrCodeErrorMessage) { errorMessage in
-            if let errorMessage = errorMessage, !errorMessage.isEmpty {
-                handleQRCodeError(errorMessage)
-                // Clear the error message after showing the alert
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                    viewModel.qrCodeErrorMessage = nil
-                }
-            }
-        }
         .onReceive(viewModel.$showURLTokenValidation) { showValidation in
             if showValidation {
                 // The sheet will be shown automatically due to the binding
             }
         }
-        .preferredColorScheme(Storage.shared.forceDarkMode.value ? .dark : nil)
+        .preferredColorScheme(Storage.shared.appearanceMode.value.colorScheme)
         .navigationTitle("Remote Settings")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -426,14 +388,6 @@ struct RemoteSettingsView: View {
     private func handleValidationError(_ message: String) {
         alertMessage = message
         alertType = .validation
-        showAlert = true
-    }
-
-    // MARK: - QR Code Error Handler
-
-    private func handleQRCodeError(_ message: String) {
-        alertMessage = message
-        alertType = .qrCodeError
         showAlert = true
     }
 
@@ -479,25 +433,6 @@ struct RemoteSettingsView: View {
 
             if device.value == "Trio" {
                 HStack {
-                    Text("Max Protein")
-                    Spacer()
-                    TextFieldWithToolBar(
-                        quantity: $viewModel.maxProtein,
-                        maxLength: 4,
-                        unit: HKUnit.gram(),
-                        allowDecimalSeparator: true,
-                        minValue: HKQuantity(unit: .gram(), doubleValue: 0),
-                        maxValue: HKQuantity(unit: .gram(), doubleValue: 100),
-                        onValidationError: { message in
-                            handleValidationError(message)
-                        }
-                    )
-                    .frame(width: 100)
-                    Text("g")
-                        .foregroundColor(.secondary)
-                }
-
-                HStack {
                     Text("Max Fat")
                     Spacer()
                     TextFieldWithToolBar(
@@ -515,7 +450,141 @@ struct RemoteSettingsView: View {
                     Text("g")
                         .foregroundColor(.secondary)
                 }
+
+                HStack {
+                    Text("Max Protein")
+                    Spacer()
+                    TextFieldWithToolBar(
+                        quantity: $viewModel.maxProtein,
+                        maxLength: 4,
+                        unit: HKUnit.gram(),
+                        allowDecimalSeparator: true,
+                        minValue: HKQuantity(unit: .gram(), doubleValue: 0),
+                        maxValue: HKQuantity(unit: .gram(), doubleValue: 100),
+                        onValidationError: { message in
+                            handleValidationError(message)
+                        }
+                    )
+                    .frame(width: 100)
+                    Text("g")
+                        .foregroundColor(.secondary)
+                }
             }
         }
+    }
+
+    // MARK: - Diagnostics
+
+    @ViewBuilder
+    private var diagnosticsRows: some View {
+        switch viewModel.diagnostics.status {
+        case .running:
+            HStack {
+                ProgressView()
+                Text("Checking Nightscout profile history…")
+                    .foregroundColor(.secondary)
+            }
+        case .unknown:
+            Button(action: { viewModel.runDiagnostics() }) {
+                HStack {
+                    Image(systemName: "stethoscope")
+                    Text("Run diagnostics")
+                }
+            }
+        case let .failed(message):
+            Button(action: { viewModel.runDiagnostics() }) {
+                HStack {
+                    Image(systemName: "stethoscope")
+                    Text("Run diagnostics again")
+                }
+            }
+            Text("Diagnostics unavailable: \(message)")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+        case .ok:
+            Button(action: { viewModel.runDiagnostics() }) {
+                HStack {
+                    Image(systemName: "stethoscope")
+                    Text("Run diagnostics again")
+                }
+            }
+            if let mismatch = viewModel.diagnostics.bundleMismatch {
+                diagnosticWarning(
+                    title: "Profile uploaded by a different app",
+                    detail: "The current Nightscout profile was uploaded by \(mismatch.observedBundleId), but you're configured for \(mismatch.expectedDevice). When Loop and Trio share a Nightscout, they overwrite each other's profile."
+                )
+            }
+            if let bouncing = viewModel.diagnostics.bouncingTokens {
+                bouncingTokensWarning(bouncing)
+            }
+            if let future = viewModel.diagnostics.futureStartDate {
+                diagnosticWarning(
+                    title: "Future-dated profile record found",
+                    detail: "A profile record has startDate \(dateTimeUtils.formattedDate(from: future.startDate)). LoopFollow ignores future-dated records, but it will still appear as the current profile in your Nightscout dashboard. Consider deleting it — it usually means a phone with the wrong system clock is uploading."
+                )
+            }
+            if !viewModel.diagnostics.hasAnyWarning {
+                HStack {
+                    Image(systemName: "checkmark.seal")
+                        .foregroundColor(.green)
+                    Text("No issues detected")
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+
+    private func diagnosticWarning(title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundColor(.orange)
+                Text(title)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.orange)
+            }
+            Text(detail)
+                .font(.footnote)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func bouncingTokensWarning(_ bouncing: RemoteDiagnostics.BouncingTokens) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundColor(.orange)
+                Text("Multiple devices uploading profiles")
+                    .fontWeight(.semibold)
+                    .foregroundColor(.orange)
+            }
+            Text("Device tokens are alternating in recent profile uploads (\(bouncing.distinctCount) tokens involved across \(bouncing.recordsScanned) records). This usually means more than one app installation is uploading to the same Nightscout. Remove the app from spare or unused phones.")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+            if !bouncing.shifts.isEmpty {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(Array(bouncing.shifts.enumerated()), id: \.offset) { _, shift in
+                        Text("\(shiftTimestampFormatter.string(from: shift.when))  \(abbreviateToken(shift.fromToken)) → \(abbreviateToken(shift.toToken))")
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var shiftTimestampFormatter: DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }
+
+    private func abbreviateToken(_ token: String) -> String {
+        guard token.count > 16 else { return token }
+        return "\(token.prefix(7))…\(token.suffix(6))"
     }
 }

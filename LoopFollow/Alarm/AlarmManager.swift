@@ -29,9 +29,11 @@ class AlarmManager {
             SensorAgeCondition.self,
             PumpChangeCondition.self,
             PumpVolumeCondition.self,
+            PumpBatteryCondition.self,
             IOBCondition.self,
             BatteryCondition.self,
             BatteryDropCondition.self,
+            FutureCarbsCondition.self,
         ]
     ) {
         var dict = [AlarmType: AlarmCondition]()

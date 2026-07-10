@@ -7,6 +7,7 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.$(unique_id).LoopFollow$(app_suffix)</string>
+		<string>com.$(unique_id).LoopFollow$(app_suffix).audiorefresh</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -16,6 +17,8 @@
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleGetInfoString</key>
 	<string></string>
+	<key>CFBundleIconFile</key>
+	<string> Activities</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.$(unique_id).LoopFollow$(app_suffix)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -31,7 +34,7 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>loopfollow</string>
+				<string>loopfollow$(app_suffix)</string>
 			</array>
 		</dict>
 	</array>
@@ -61,28 +64,12 @@
 	<string>This app requires Face ID for secure authentication.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
-		<key>UISceneConfigurations</key>
-		<dict>
-			<key>UIWindowSceneSessionRoleApplication</key>
-			<array>
-				<dict>
-					<key>UISceneConfigurationName</key>
-					<string>Default Configuration</string>
-					<key>UISceneDelegateClassName</key>
-					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-					<key>UISceneStoryboardFile</key>
-					<string>Main</string>
-				</dict>
-			</array>
-		</dict>
-	</dict>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
+		<string>fetch</string>
 		<string>processing</string>
 		<string>bluetooth-central</string>
 		<string>remote-notification</string>
@@ -91,22 +78,6 @@
 	<true/>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
-	<key>UIMainStoryboardFile</key>
-	<string>Main</string>
-	<key>UIRequiredDeviceCapabilities</key>
-	<array>
-		<string>armv7</string>
-	</array>
-	<key>UIStatusBarTintParameters</key>
-	<dict>
-		<key>UINavigationBar</key>
-		<dict>
-			<key>Style</key>
-			<string>UIBarStyleDefault</string>
-			<key>Translucent</key>
-			<false/>
-		</dict>
-	</dict>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationLandscapeLeft</string>

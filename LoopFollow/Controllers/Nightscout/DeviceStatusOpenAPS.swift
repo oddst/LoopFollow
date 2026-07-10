@@ -9,32 +9,13 @@ extension MainViewController {
     func DeviceStatusOpenAPS(formatter: ISO8601DateFormatter, lastDeviceStatus: [String: AnyObject]?, lastLoopRecord: [String: AnyObject]) {
         Storage.shared.device.value = lastDeviceStatus?["device"] as? String ?? ""
         if lastLoopRecord["failureReason"] != nil {
-            LoopStatusLabel.text = "X"
+            Observable.shared.loopStatusText.value = "X"
             latestLoopStatusString = "X"
         } else {
             guard let enactedOrSuggested = lastLoopRecord["suggested"] as? [String: AnyObject] ?? lastLoopRecord["enacted"] as? [String: AnyObject] else {
-                LoopStatusLabel.text = "↻"
+                Observable.shared.loopStatusText.value = "↻"
                 latestLoopStatusString = "↻"
                 return
-            }
-
-            var wasEnacted: Bool
-            if let enacted = lastLoopRecord["enacted"] as? [String: AnyObject] {
-                wasEnacted = true
-                if let timestampString = enacted["timestamp"] as? String,
-                   let lastLoopTime = formatter.date(from: timestampString)?.timeIntervalSince1970
-                {
-                    let storedTime = Observable.shared.alertLastLoopTime.value ?? 0
-                    if lastLoopTime < storedTime {
-                        LogManager.shared.log(category: .deviceStatus, message: "Received an old timestamp for enacted: \(lastLoopTime) is older than last stored time \(storedTime), ignoring update.", isDebug: false)
-                    } else {
-                        Observable.shared.alertLastLoopTime.value = lastLoopTime
-                        LogManager.shared.log(category: .deviceStatus, message: "New LastLoopTime: \(lastLoopTime)", isDebug: true)
-                    }
-                }
-            } else {
-                wasEnacted = false
-                LogManager.shared.log(category: .deviceStatus, message: "Last devicestatus is missing enacted")
             }
 
             var updatedTime: TimeInterval?
@@ -45,28 +26,34 @@ extension MainViewController {
                 updatedTime = parsedTime
                 let formattedTime = Localizer.formatTimestampToLocalString(parsedTime)
                 infoManager.updateInfoData(type: .updated, value: formattedTime)
+                Observable.shared.enactedOrSuggested.value = updatedTime
             }
 
             // ISF
             let profileISF = profileManager.currentISF()
             var enactedISF: HKQuantity?
-            if let enactedISFValue = enactedOrSuggested["ISF"] as? Double {
-                var determinedISFUnit: HKUnit = .milligramsPerDeciliter
-                if enactedISFValue < 16 {
-                    determinedISFUnit = .millimolesPerLiter
-                }
-                enactedISF = HKQuantity(unit: determinedISFUnit, doubleValue: enactedISFValue)
+            // Some uploaders (e.g. Trio Swift oref with dynamic ISF) report a
+            // placeholder 0 in the structured ISF field; treat that as missing.
+            if let enactedISFValue = enactedOrSuggested["ISF"] as? Double, enactedISFValue != 0 {
+                enactedISF = HKQuantity(unit: .milligramsPerDeciliter, doubleValue: enactedISFValue)
             }
             if let profileISF = profileISF, let enactedISF = enactedISF, profileISF != enactedISF {
                 infoManager.updateInfoData(type: .isf, firstValue: profileISF, secondValue: enactedISF, separator: .arrow)
+                Storage.shared.lastIsfMgdlPerU.value = enactedISF.doubleValue(for: .milligramsPerDeciliter)
             } else if let profileISF = profileISF {
                 infoManager.updateInfoData(type: .isf, value: profileISF)
+                Storage.shared.lastIsfMgdlPerU.value = profileISF.doubleValue(for: .milligramsPerDeciliter)
             }
 
             // Carb Ratio (CR)
+            // Prefer the structured CR field; fall back to parsing it out of the
+            // reason string for uploaders that don't expose it (a CR of 0 is never
+            // valid, so it's treated as missing).
             let profileCR = profileManager.currentCarbRatio()
             var enactedCR: Double?
-            if let reasonString = enactedOrSuggested["reason"] as? String {
+            if let structuredCR = enactedOrSuggested["CR"] as? Double, structuredCR != 0 {
+                enactedCR = structuredCR
+            } else if let reasonString = enactedOrSuggested["reason"] as? String {
                 let pattern = "CR: (\\d+(?:\\.\\d+)?)"
                 if let regex = try? NSRegularExpression(pattern: pattern) {
                     let nsString = reasonString as NSString
@@ -79,14 +66,17 @@ extension MainViewController {
 
             if let profileCR = profileCR, let enactedCR = enactedCR, profileCR != enactedCR {
                 infoManager.updateInfoData(type: .carbRatio, value: profileCR, enactedValue: enactedCR, separator: .arrow)
+                Storage.shared.lastCarbRatio.value = enactedCR
             } else if let profileCR = profileCR {
                 infoManager.updateInfoData(type: .carbRatio, value: profileCR)
+                Storage.shared.lastCarbRatio.value = profileCR
             }
 
             // IOB
             if let iobMetric = InsulinMetric(from: lastLoopRecord["iob"], key: "iob") {
                 infoManager.updateInfoData(type: .iob, value: iobMetric)
                 latestIOB = iobMetric
+                Observable.shared.iobText.value = iobMetric.formattedValue()
             }
 
             // COB
@@ -120,12 +110,24 @@ extension MainViewController {
             if let sens = enactedOrSuggested["sensitivityRatio"] as? Double {
                 let formattedSens = String(format: "%.0f", sens * 100.0) + "%"
                 infoManager.updateInfoData(type: .autosens, value: formattedSens)
+                Storage.shared.lastAutosens.value = sens
+            }
+
+            // Recommended Bolus
+            if let rec = InsulinMetric(from: lastLoopRecord, key: "recommendedBolus") {
+                infoManager.updateInfoData(type: .recBolus, value: rec)
+                Observable.shared.deviceRecBolus.value = rec.value
+            } else {
+                Observable.shared.deviceRecBolus.value = nil
             }
 
             // Eventual BG
             if let eventualBGValue = enactedOrSuggested["eventualBG"] as? Double {
                 let eventualBGQuantity = HKQuantity(unit: .milligramsPerDeciliter, doubleValue: eventualBGValue)
-                PredictionLabel.text = Localizer.formatQuantity(eventualBGQuantity)
+                Observable.shared.predictionText.value = Localizer.formatQuantity(eventualBGQuantity)
+                Storage.shared.projectedBgMgdl.value = eventualBGValue
+            } else {
+                Storage.shared.projectedBgMgdl.value = nil
             }
 
             // Target
@@ -150,11 +152,19 @@ extension MainViewController {
                 } else {
                     infoManager.updateInfoData(type: .target, value: profileTargetHigh)
                 }
+                let effectiveMgdl = enactedTarget.doubleValue(for: .milligramsPerDeciliter)
+                Storage.shared.lastTargetLowMgdl.value = effectiveMgdl
+                Storage.shared.lastTargetHighMgdl.value = effectiveMgdl
+            } else if let profileTargetHigh = profileTargetHigh {
+                let profileMgdl = profileTargetHigh.doubleValue(for: .milligramsPerDeciliter)
+                Storage.shared.lastTargetLowMgdl.value = profileMgdl
+                Storage.shared.lastTargetHighMgdl.value = profileMgdl
             }
 
             // TDD
             if let tddMetric = InsulinMetric(from: enactedOrSuggested, key: "TDD") {
                 infoManager.updateInfoData(type: .tdd, value: tddMetric)
+                Storage.shared.lastTdd.value = tddMetric.value
             }
 
             let predBGsData: [String: AnyObject]? = {
@@ -170,54 +180,41 @@ extension MainViewController {
                 return nil
             }()
 
-            let predictioncolor = UIColor.systemGray
-            PredictionLabel.textColor = predictioncolor
+            Observable.shared.predictionColor.value = .gray
             topPredictionBG = Storage.shared.minBGScale.value
-            if let predbgdata = predBGsData {
-                let predictionTypes: [(type: String, colorName: String, dataIndex: Int)] = [
-                    ("ZT", "ZT", 12),
-                    ("IOB", "Insulin", 13),
-                    ("COB", "LoopYellow", 14),
-                    ("UAM", "UAM", 15),
-                ]
 
+            if let predbgdata = predBGsData {
+                let toLoad = Int(Storage.shared.predictionToLoad.value * 12)
+                var rawPredBGs = [String: [Double]]()
                 var minPredBG = Double.infinity
                 var maxPredBG = -Double.infinity
 
-                for (type, colorName, dataIndex) in predictionTypes {
-                    var predictionData = [ShareGlucoseData]()
-                    if let graphdata = predbgdata[type] as? [Double] {
-                        var predictionTime = updatedTime ?? Date().timeIntervalSince1970
-                        let toLoad = Int(Storage.shared.predictionToLoad.value * 12)
-
-                        for i in 0 ... toLoad {
-                            if i < graphdata.count {
-                                let predictionValue = graphdata[i]
-                                minPredBG = min(minPredBG, predictionValue)
-                                maxPredBG = max(maxPredBG, predictionValue)
-
-                                let prediction = ShareGlucoseData(sgv: Int(round(predictionValue)), date: predictionTime, direction: "flat")
-                                predictionData.append(prediction)
-                                predictionTime += 300
-                            }
+                for type in ["ZT", "IOB", "COB", "UAM"] {
+                    if let arr = predbgdata[type] as? [Double], !arr.isEmpty {
+                        rawPredBGs[type] = arr
+                        for i in 0 ... min(toLoad, arr.count - 1) {
+                            minPredBG = min(minPredBG, arr[i])
+                            maxPredBG = max(maxPredBG, arr[i])
                         }
                     }
-
-                    let color = UIColor(named: colorName) ?? UIColor.systemPurple
-                    updatePredictionGraphGeneric(
-                        dataIndex: dataIndex,
-                        predictionData: predictionData,
-                        chartLabel: type,
-                        color: color
-                    )
                 }
+
+                openAPSPredBGs = rawPredBGs.isEmpty ? nil : rawPredBGs
+                openAPSPredUpdatedTime = updatedTime
 
                 if minPredBG != Double.infinity, maxPredBG != -Double.infinity {
                     let value = "\(Localizer.toDisplayUnits(String(minPredBG)))/\(Localizer.toDisplayUnits(String(maxPredBG)))"
                     infoManager.updateInfoData(type: .minMax, value: value)
+                    Storage.shared.lastMinBgMgdl.value = minPredBG
+                    Storage.shared.lastMaxBgMgdl.value = maxPredBG
                 } else {
-                    infoManager.updateInfoData(type: .minMax, value: "N/A")
+                    infoManager.clearInfoData(type: .minMax)
                 }
+
+                updateOpenAPSPredictionDisplay()
+            } else {
+                openAPSPredBGs = nil
+                openAPSPredUpdatedTime = nil
             }
 
             if let loopStatus = lastLoopRecord["recommendedTempBasal"] as? [String: AnyObject] {
@@ -226,18 +223,22 @@ extension MainViewController {
                     if bgData.count > 0 {
                         lastBGTime = bgData[bgData.count - 1].date
                     }
-                    if tempBasalTime > lastBGTime, !wasEnacted {
-                        LoopStatusLabel.text = "⏀"
+                    if tempBasalTime > lastBGTime {
+                        Observable.shared.loopStatusText.value = "⏀"
                         latestLoopStatusString = "⏀"
                     } else {
-                        LoopStatusLabel.text = "↻"
+                        Observable.shared.loopStatusText.value = "↻"
                         latestLoopStatusString = "↻"
                     }
                 }
             } else {
-                LoopStatusLabel.text = "↻"
+                Observable.shared.loopStatusText.value = "↻"
                 latestLoopStatusString = "↻"
             }
+
+            // Live Activity storage
+            Storage.shared.lastIOB.value = latestIOB?.value
+            Storage.shared.lastCOB.value = latestCOB?.value
         }
     }
 }

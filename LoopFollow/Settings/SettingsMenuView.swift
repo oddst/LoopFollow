@@ -5,150 +5,85 @@ import SwiftUI
 import UIKit
 
 struct SettingsMenuView: View {
-    // MARK: - Observed Objects
-
     @ObservedObject private var nightscoutURL = Storage.shared.url
-    @ObservedObject private var settingsPath = Observable.shared.settingsPath
-
-    // MARK: – Local state
-
-    @State private var latestVersion: String?
-    @State private var versionTint: Color = .secondary
-    @State private var showingTabCustomization = false
-
-    // MARK: – Observed objects
-
-    @ObservedObject private var url = Storage.shared.url
-
-    // MARK: – Body
 
     var body: some View {
-        NavigationStack(path: $settingsPath.value) {
-            List {
-                // ───────── Data settings ─────────
-                dataSection
+        List {
+            dataSection
 
-                // ───────── App settings ─────────
-                Section("App Settings") {
-                    NavigationRow(title: "Background Refresh Settings",
-                                  icon: "arrow.clockwise")
-                    {
-                        settingsPath.value.append(Sheet.backgroundRefresh)
-                    }
+            Section("Display Settings") {
+                NavigationRow(title: "General",
+                              icon: "gearshape",
+                              value: SettingsRoute.general)
+                NavigationRow(title: "Graph",
+                              icon: "chart.xyaxis.line",
+                              value: SettingsRoute.graph)
 
-                    NavigationRow(title: "General Settings",
-                                  icon: "gearshape")
-                    {
-                        settingsPath.value.append(Sheet.general)
-                    }
-
-                    NavigationRow(title: "Graph Settings",
-                                  icon: "chart.xyaxis.line")
-                    {
-                        settingsPath.value.append(Sheet.graph)
-                    }
-
-                    NavigationRow(title: "Tab Settings",
-                                  icon: "rectangle.3.group")
-                    {
-                        showingTabCustomization = true
-                    }
-
-                    if !nightscoutURL.value.isEmpty {
-                        NavigationRow(title: "Information Display Settings",
-                                      icon: "info.circle")
-                        {
-                            settingsPath.value.append(Sheet.infoDisplay)
-                        }
-
-                        NavigationRow(title: "Remote Settings",
-                                      icon: "antenna.radiowaves.left.and.right")
-                        {
-                            settingsPath.value.append(Sheet.remote)
-                        }
-                    } else {
-                        NavigationRow(title: "Import Settings",
-                                      icon: "square.and.arrow.down")
-                        {
-                            settingsPath.value.append(Sheet.remote)
-                        }
-                    }
+                if !nightscoutURL.value.isEmpty {
+                    NavigationRow(title: "Information Display",
+                                  icon: "info.circle",
+                                  value: SettingsRoute.infoDisplay)
                 }
 
-                // ───────── Alarms ─────────
-                Section {
-                    NavigationRow(title: "Alarms",
-                                  icon: "bell")
-                    {
-                        settingsPath.value.append(Sheet.alarmsList)
-                    }
+                NavigationRow(title: "Units and Metrics",
+                              icon: "scalemass",
+                              value: SettingsRoute.units)
 
-                    NavigationRow(title: "Alarm Settings",
-                                  icon: "bell.badge")
-                    {
-                        settingsPath.value.append(Sheet.alarmSettings)
-                    }
-                }
-
-                // ───────── Integrations ─────────
-                Section("Integrations") {
-                    NavigationRow(title: "Calendar",
-                                  icon: "calendar")
-                    {
-                        settingsPath.value.append(Sheet.calendar)
-                    }
-
-                    NavigationRow(title: "Contact",
-                                  icon: "person.circle")
-                    {
-                        settingsPath.value.append(Sheet.contact)
-                    }
-                }
-
-                // ───────── Advanced / Logs ─────────
-                Section("Advanced Settings") {
-                    NavigationRow(title: "Advanced Settings",
-                                  icon: "exclamationmark.shield")
-                    {
-                        settingsPath.value.append(Sheet.advanced)
-                    }
-                }
-
-                Section("Logging") {
-                    NavigationRow(title: "View Log",
-                                  icon: "doc.text.magnifyingglass")
-                    {
-                        settingsPath.value.append(Sheet.viewLog)
-                    }
-
-                    ActionRow(title: "Share Logs",
-                              icon: "square.and.arrow.up",
-                              action: shareLogs)
-                }
-
-                // ───────── Community ─────────
-                Section("Community") {
-                    LinkRow(title: "LoopFollow Facebook Group",
-                            icon: "person.2.fill",
-                            url: URL(string: "https://www.facebook.com/groups/loopfollowlnl")!)
-                }
-
-                // ───────── Build info ─────────
-                buildInfoSection
+                NavigationRow(title: "Tabs",
+                              icon: "rectangle.3.group",
+                              value: SettingsRoute.tabSettings)
             }
-            .navigationTitle("Settings")
-            .navigationDestination(for: Sheet.self) { $0.destination }
-            .sheet(isPresented: $showingTabCustomization) {
-                TabCustomizationModal(
-                    isPresented: $showingTabCustomization,
-                    onApply: {
-                        // Dismiss any presented view controller and go to home tab
-                        handleTabReorganization()
-                    }
-                )
+
+            Section("App Settings") {
+                NavigationRow(title: "Background Refresh",
+                              icon: "arrow.clockwise",
+                              value: SettingsRoute.backgroundRefresh)
+
+                NavigationRow(title: "Import/Export",
+                              icon: "square.and.arrow.down",
+                              value: SettingsRoute.importExport)
+
+                NavigationRow(title: "APN",
+                              icon: "bell.and.waves.left.and.right",
+                              value: SettingsRoute.apn)
+
+                #if !targetEnvironment(macCatalyst)
+                    NavigationRow(title: "Live Activity",
+                                  icon: "dot.radiowaves.left.and.right",
+                                  value: SettingsRoute.liveActivity)
+                #endif
+
+                if !nightscoutURL.value.isEmpty {
+                    NavigationRow(title: "Remote",
+                                  icon: "antenna.radiowaves.left.and.right",
+                                  value: SettingsRoute.remote)
+                }
+            }
+
+            Section("Alarms") {
+                NavigationRow(title: "Alarms",
+                              icon: "bell.badge",
+                              value: SettingsRoute.alarmSettings)
+            }
+
+            Section("Integrations") {
+                NavigationRow(title: "Calendar",
+                              icon: "calendar",
+                              value: SettingsRoute.calendar)
+
+                NavigationRow(title: "Contact",
+                              icon: "person.circle",
+                              value: SettingsRoute.contact)
+            }
+
+            Section("Advanced Settings") {
+                NavigationRow(title: "Advanced",
+                              icon: "exclamationmark.shield",
+                              value: SettingsRoute.advanced)
             }
         }
-        .task { await refreshVersionInfo() }
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.large)
     }
 
     // MARK: – Section builders
@@ -156,152 +91,87 @@ struct SettingsMenuView: View {
     @ViewBuilder
     private var dataSection: some View {
         Section("Data Settings") {
-            Picker("Units",
-                   selection: Binding(
-                       get: { Storage.shared.units.value },
-                       set: { Storage.shared.units.value = $0 }
-                   )) {
-                Text("mg/dL").tag("mg/dL")
-                Text("mmol/L").tag("mmol/L")
-            }
-            .pickerStyle(.segmented)
+            NavigationRow(title: "Nightscout",
+                          icon: "network",
+                          value: SettingsRoute.nightscout)
 
-            NavigationRow(title: "Nightscout Settings",
-                          icon: "network")
-            {
-                settingsPath.value.append(Sheet.nightscout)
-            }
-
-            NavigationRow(title: "Dexcom Settings",
-                          icon: "sensor.tag.radiowaves.forward")
-            {
-                settingsPath.value.append(Sheet.dexcom)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var buildInfoSection: some View {
-        let build = BuildDetails.default
-        let ver = AppVersionManager().version()
-
-        Section("Build Information") {
-            keyValue("Version", ver, tint: versionTint)
-            keyValue("Latest version", latestVersion ?? "Fetching…")
-
-            if !(build.isMacApp() || build.isSimulatorBuild()) {
-                keyValue(build.expirationHeaderString,
-                         dateTimeUtils.formattedDate(from: build.calculateExpirationDate()))
-            }
-            keyValue("Built",
-                     dateTimeUtils.formattedDate(from: build.buildDate()))
-            keyValue("Branch", build.branchAndSha)
-        }
-    }
-
-    // MARK: – Helpers
-
-    private func keyValue(_ key: String,
-                          _ value: String,
-                          tint: Color = .secondary) -> some View
-    {
-        HStack {
-            Text(key)
-            Spacer()
-            Text(value).foregroundColor(tint)
-        }
-    }
-
-    private func refreshVersionInfo() async {
-        let mgr = AppVersionManager()
-        let (latest, newer, blacklisted) = await mgr.checkForNewVersionAsync()
-        latestVersion = latest ?? "Unknown"
-
-        let current = mgr.version()
-        versionTint = blacklisted ? .red
-            : newer ? .orange
-            : latest == current ? .green
-            : .secondary
-    }
-
-    private func shareLogs() {
-        let files = LogManager.shared.logFilesForTodayAndYesterday()
-        guard !files.isEmpty else {
-            UIApplication.shared.topMost?.presentSimpleAlert(
-                title: "No Logs Available",
-                message: "There are no logs to share."
-            )
-            return
-        }
-        let avc = UIActivityViewController(activityItems: files,
-                                           applicationActivities: nil)
-        UIApplication.shared.topMost?.present(avc, animated: true)
-    }
-
-    private func handleTabReorganization() {
-        // Find the root tab bar controller
-        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let window = windowScene.windows.first,
-              let rootVC = window.rootViewController else { return }
-
-        // Navigate through the hierarchy to find the tab bar controller
-        var tabBarController: UITabBarController?
-
-        if let tbc = rootVC as? UITabBarController {
-            tabBarController = tbc
-        } else if let nav = rootVC as? UINavigationController,
-                  let tbc = nav.viewControllers.first as? UITabBarController
-        {
-            tabBarController = tbc
-        }
-
-        guard let tabBar = tabBarController else { return }
-
-        // Dismiss any modals first
-        if let presented = tabBar.presentedViewController {
-            presented.dismiss(animated: false) {
-                // After dismissal, switch to home tab
-                tabBar.selectedIndex = 0
-            }
-        } else {
-            // No modal to dismiss, just switch to home
-            tabBar.selectedIndex = 0
+            NavigationRow(title: "Dexcom",
+                          icon: "sensor.tag.radiowaves.forward",
+                          value: SettingsRoute.dexcom)
         }
     }
 }
 
 // MARK: – Sheet routing
 
-private enum Sheet: Hashable, Identifiable {
+enum SettingsRoute: Hashable, Identifiable {
+    case settings
+    case units
     case nightscout, dexcom
     case backgroundRefresh
     case general, graph
+    case tabSettings
     case infoDisplay
-    case alarmsList, alarmSettings
+    case alarmSettings
+    case apn
+    #if !targetEnvironment(macCatalyst)
+        case liveActivity
+    #endif
     case remote
+    case importExport
     case calendar, contact
     case advanced
-    case viewLog
+    case aggregatedStats
 
     var id: Self { self }
 
     @ViewBuilder
     var destination: some View {
         switch self {
+        case .settings: SettingsMenuView()
+        case .units: UnitsSettingsView()
         case .nightscout: NightscoutSettingsView(viewModel: .init())
         case .dexcom: DexcomSettingsView(viewModel: .init())
         case .backgroundRefresh: BackgroundRefreshSettingsView(viewModel: .init())
         case .general: GeneralSettingsView()
         case .graph: GraphSettingsView()
+        case .tabSettings: TabCustomizationModal()
         case .infoDisplay: InfoDisplaySettingsView(viewModel: .init())
-        case .alarmsList: AlarmListView()
         case .alarmSettings: AlarmSettingsView()
+        case .apn: APNSettingsView()
+        #if !targetEnvironment(macCatalyst)
+            case .liveActivity: LiveActivitySettingsView()
+        #endif
         case .remote: RemoteSettingsView(viewModel: .init())
+        case .importExport: ImportExportSettingsView()
         case .calendar: CalendarSettingsView()
         case .contact: ContactSettingsView(viewModel: .init())
         case .advanced: AdvancedSettingsView(viewModel: .init())
-        case .viewLog: LogView(viewModel: .init())
+        case .aggregatedStats:
+            AggregatedStatsViewWrapper()
         }
+    }
+}
+
+// Helper view to access MainViewController
+struct AggregatedStatsViewWrapper: View {
+    @State private var mainViewController: MainViewController?
+
+    var body: some View {
+        Group {
+            if let mainVC = mainViewController {
+                AggregatedStatsContentView(mainViewController: mainVC)
+            } else {
+                Text("Loading stats...")
+                    .onAppear {
+                        mainViewController = getMainViewController()
+                    }
+            }
+        }
+    }
+
+    private func getMainViewController() -> MainViewController? {
+        MainViewController.shared
     }
 }
 
@@ -311,7 +181,14 @@ import UIKit
 
 extension UIApplication {
     var topMost: UIViewController? {
-        guard var top = keyWindow?.rootViewController else { return nil }
+        // `keyWindow` is deprecated and returns nil on Mac Catalyst / multi-window iPad.
+        // Walk connected scenes instead and prefer the foreground-active one.
+        let windowScenes = connectedScenes.compactMap { $0 as? UIWindowScene }
+        let activeScene = windowScenes.first { $0.activationState == .foregroundActive }
+            ?? windowScenes.first
+        let rootVC = activeScene?.windows.first(where: \.isKeyWindow)?.rootViewController
+            ?? activeScene?.windows.first?.rootViewController
+        guard var top = rootVC else { return nil }
         while let presented = top.presentedViewController {
             top = presented
         }

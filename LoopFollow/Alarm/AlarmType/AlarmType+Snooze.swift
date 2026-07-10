@@ -11,12 +11,12 @@ extension AlarmType {
             return .day
         case .low, .high, .fastDrop, .fastRise,
              .missedReading, .notLooping, .missedBolus,
-             .recBolus,
+             .futureCarbs, .recBolus,
              .overrideStart, .overrideEnd, .tempTargetStart,
              .tempTargetEnd:
             return .minute
         case .battery, .batteryDrop, .sensorChange, .pumpChange, .cob, .iob,
-             .pump:
+             .pump, .pumpBattery:
             return .hour
         case .temporary:
             return .none

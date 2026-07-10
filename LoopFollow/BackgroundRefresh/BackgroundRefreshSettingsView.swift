@@ -11,23 +11,21 @@ struct BackgroundRefreshSettingsView: View {
     @ObservedObject var bleManager = BLEManager.shared
 
     var body: some View {
-        NavigationView {
-            Form {
-                refreshTypeSection
+        Form {
+            refreshTypeSection
 
-                if viewModel.backgroundRefreshType.isBluetooth {
-                    selectedDeviceSection
-                    availableDevicesSection
-                }
-            }
-            .onAppear {
-                startTimer()
-            }
-            .onDisappear {
-                stopTimer()
+            if viewModel.backgroundRefreshType.isBluetooth {
+                selectedDeviceSection
+                availableDevicesSection
             }
         }
-        .preferredColorScheme(Storage.shared.forceDarkMode.value ? .dark : nil)
+        .onAppear {
+            startTimer()
+        }
+        .onDisappear {
+            stopTimer()
+        }
+        .preferredColorScheme(Storage.shared.appearanceMode.value.colorScheme)
         .navigationBarTitle("Background Refresh Settings", displayMode: .inline)
     }
 
