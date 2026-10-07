@@ -12,6 +12,7 @@ struct GraphSettingsView: View {
     @ObservedObject private var show30MinLine = Storage.shared.show30MinLine
     @ObservedObject private var show90MinLine = Storage.shared.show90MinLine
     @ObservedObject private var showMidnightLines = Storage.shared.showMidnightLines
+    @ObservedObject private var showPriorDayTimeLines = Storage.shared.showPriorDayTimeLines
     @ObservedObject private var showYesterdayLine = Storage.shared.showYesterdayLine
     @ObservedObject private var smallGraphTreatments = Storage.shared.smallGraphTreatments
 
@@ -50,15 +51,21 @@ struct GraphSettingsView: View {
 
                 Toggle("Show Midnight Lines", isOn: $showMidnightLines.value)
                     .onChange(of: showMidnightLines.value) { _ in markDirty() }
+
+                Toggle("Show Prior Day Time Lines", isOn: $showPriorDayTimeLines.value)
+                    .onChange(of: showPriorDayTimeLines.value) { _ in markDirty() }
             }
 
             // ── Treatments ───────────────────────────────────────────────
             if nightscoutEnabled {
                 Section("Treatments") {
                     Toggle("Show Carb/Bolus Values", isOn: $showValues.value)
+                        .onChange(of: showValues.value) { _ in markDirty() }
                     Toggle("Show Carb Absorption", isOn: $showAbsorption.value)
+                        .onChange(of: showAbsorption.value) { _ in markDirty() }
                     Toggle("Treatments on Small Graph",
                            isOn: $smallGraphTreatments.value)
+                        .onChange(of: smallGraphTreatments.value) { _ in markDirty() }
                 }
             }
 
